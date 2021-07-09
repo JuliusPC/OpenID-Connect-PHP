@@ -357,9 +357,6 @@ class OpenIDConnectClient
 
             // Verify the signature
             if ($this->canVerifySignatures()) {
-                if (!$this->getProviderConfigValue('jwks_uri')) {
-                    throw new OpenIDConnectClientException ('Unable to verify signature due to no jwks_uri being defined');
-                }
                 if (!$this->verifyJWTsignature($token_json->id_token)) {
                     throw new OpenIDConnectClientException ('Unable to verify signature');
                 }
@@ -662,14 +659,13 @@ class OpenIDConnectClient
         };
     }
 
-    /**
-     * Start Here
-     * @return void
-     * @throws OpenIDConnectClientException
-     */
-    private function requestAuthorization() {
-
-        $auth_endpoint = $this->getProviderConfigValue('authorization_endpoint');
+   /**
+    * Get the authorization URL
+    *
+    * @return string
+    */
+   public function getAuthorizationURL() {
+	$auth_endpoint = $this->getProviderConfigValue('authorization_endpoint');
         $response_type = 'code';
 
         // State essentially acts as a session key for OIDC
@@ -714,6 +710,16 @@ class OpenIDConnectClient
         }
 
         $auth_endpoint .= (strpos($auth_endpoint, '?') === false ? '?' : '&') . http_build_query($auth_params, '', '&', $this->encType);
+	return $auth_endpoint;
+   }
+
+    /**
+     * Start Here
+     * @return void
+     * @throws OpenIDConnectClientException
+     */
+    private function requestAuthorization() {
+        $auth_endpoint = $this->getAuthorizationURL();
 
         $this->commitSession();
         $this->redirect($auth_endpoint);
@@ -985,7 +991,7 @@ class OpenIDConnectClient
             throw new OpenIDConnectClientException('hash_hmac support unavailable.');
         }
 
-        $expected=hash_hmac($hashtype, $payload, $key, true);
+        $expected=hash_hmac($hashtype, $payload, base64_decode($key), true);
 
         if (function_exists('hash_equals')) {
             return hash_equals($signature, $expected);
@@ -1016,10 +1022,6 @@ class OpenIDConnectClient
             throw new OpenIDConnectClientException('Error decoding JSON from token header');
         }
         $payload = implode('.', $parts);
-        $jwks = json_decode($this->fetchURL($this->getProviderConfigValue('jwks_uri')));
-        if ($jwks === NULL) {
-            throw new OpenIDConnectClientException('Error decoding JSON from jwks_uri');
-        }
         if (!isset($header->alg)) {
             throw new OpenIDConnectClientException('Error missing signature type in token header');
         }
@@ -1030,6 +1032,14 @@ class OpenIDConnectClient
             case 'RS512':
                 $hashtype = 'sha' . substr($header->alg, 2);
                 $signatureType = $header->alg === 'PS256' ? 'PSS' : '';
+                
+                if (!$this->getProviderConfigValue('jwks_uri')) {
+                    throw new OpenIDConnectClientException ('Unable to verify signature due to no jwks_uri being defined');
+                }
+                $jwks = json_decode($this->fetchURL($this->getProviderConfigValue('jwks_uri')));
+                if ($jwks === NULL) {
+                    throw new OpenIDConnectClientException('Error decoding JSON from jwks_uri');
+                }
 
                 $verified = $this->verifyRSAJWTsignature($hashtype,
                     $this->getKeyForHeader($jwks->keys, $header),
@@ -1066,9 +1076,9 @@ class OpenIDConnectClient
         return (($this->issuerValidator->__invoke($claims->iss))
             && (($claims->aud === $this->clientID) || in_array($this->clientID, $claims->aud, true))
             && ($this->unsafeDisableNonce || $claims->nonce === $this->getNonce())
-            && ( isset($claims->exp) && ((gettype($claims->exp) === 'integer') && ($claims->exp >= time() - $this->leeway)))
-            && ( isset($claims->iat) && ((gettype($claims->iat) === 'integer') && ($claims->iat <= time() + $this->leeway)))
-            && ( !isset($claims->nbf) || ((gettype($claims->nbf) === 'integer') && ($claims->nbf <= time() + $this->leeway)))
+            && ( isset($claims->exp) && (is_numeric($claims->exp) && ($claims->exp >= time() - $this->leeway)))
+            && ( isset($claims->iat) && (is_numeric($claims->iat) && ($claims->iat <= time() + $this->leeway)))
+            && ( !isset($claims->nbf) || (is_numeric($claims->nbf) && ($claims->nbf <= time() + $this->leeway)))
             && ( !isset($claims->at_hash) || $claims->at_hash === $expected_at_hash )
         );
     }
